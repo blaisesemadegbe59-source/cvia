@@ -1,0 +1,52 @@
+import { chromium } from "playwright";
+import fs from "node:fs";
+(async () => {
+  const b = await chromium.launch();
+  const ctx = await b.newContext({ viewport: { width: 1440, height: 860 } });
+  const p = await ctx.newPage();
+  p.on("pageerror", (e) => console.log("PAGEERROR", e.message));
+  p.on("console", (m) => { if (m.type() === "error") console.log("CONSOLE", m.text().slice(0, 160)); });
+  // 1. invité : éditeur
+  await p.goto("http://localhost:3000/creer?modele=technique");
+  await p.getByLabel("Prénom").fill("Koffi");
+  await p.getByLabel("Nom", { exact: true }).fill("Mensah");
+  await p.getByLabel("Titre professionnel").fill("Comptable");
+  await p.waitForTimeout(900);
+  const draft = await p.evaluate(() => localStorage.getItem("cvia:draft"));
+  console.log("brouillon local enregistré:", !!draft && JSON.parse(draft).content.basics.firstName);
+  await p.getByRole("button", { name: "Design" }).click();
+  await p.waitForTimeout(600);
+  await p.screenshot({ path: "/tmp/s/design.png" });
+  await p.getByRole("button", { name: "Télécharger" }).click();
+  await p.waitForTimeout(300);
+  await p.screenshot({ path: "/tmp/s/dl-guest.png" });
+  // 2. inscription -> import du brouillon
+  await p.getByRole("link", { name: "Créer mon compte gratuit" }).click();
+  await p.waitForURL("**/inscription**");
+  const email = `flow${Date.now()}@example.com`;
+  await p.getByLabel("Nom complet").fill("Koffi Mensah");
+  await p.getByLabel("Adresse e-mail").fill(email);
+  await p.locator("#password").fill("motdepasse-ok-9");
+  await p.getByRole("button", { name: "Créer mon compte" }).click();
+  await p.waitForURL("**/app/cv/**", { timeout: 20000 });
+  console.log("importé ->", p.url());
+  await p.waitForTimeout(1200);
+  console.log("prénom importé:", await p.getByLabel("Prénom").inputValue(), "| modèle importé: technique");
+  // 3. débloquer -> paiement
+  await p.getByRole("button", { name: "Télécharger" }).click();
+  await p.getByRole("link", { name: /Débloquer/ }).click();
+  await p.waitForURL("**/app/offres**");
+  await p.getByRole("button", { name: "Continuer vers le paiement" }).click();
+  await p.waitForURL("**/app/paiement/**");
+  await p.locator("#phone").fill("01 97 00 00 01");
+  await p.getByRole("button", { name: "Payer maintenant" }).click();
+  await p.getByText("Confirmez sur votre téléphone").waitFor();
+  await p.screenshot({ path: "/tmp/s/pay-wait.png" });
+  await p.getByRole("button", { name: "Simuler : accepté" }).click();
+  await p.getByText("Paiement confirmé").waitFor({ timeout: 15000 });
+  await p.screenshot({ path: "/tmp/s/pay-ok.png" });
+  console.log("paiement OK");
+  const [dl] = await Promise.all([p.waitForEvent("download"), p.getByRole("link", { name: /Télécharger mon CV/ }).click()]);
+  await dl.saveAs("/tmp/s/final.pdf"); console.log("PDF:", fs.statSync("/tmp/s/final.pdf").size);
+  await b.close();
+})().catch((e) => { console.error("FLOW ERROR", e.message.slice(0, 400)); process.exit(1); });

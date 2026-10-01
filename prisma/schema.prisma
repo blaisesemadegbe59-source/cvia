@@ -1,0 +1,286 @@
+// Schéma de référence (cf. cahier des charges, annexe A).
+// Développement : SQLite. Production : PostgreSQL -> remplacer provider par "postgresql".
+// Les "enums" sont stockés en chaînes de caractères pour rester compatibles SQLite/PostgreSQL.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String?   @unique
+  emailVerified DateTime?
+  phone         String?   @unique
+  name          String?
+  passwordHash  String?
+  role          String    @default("CANDIDATE") // CANDIDATE | SUPPORT | ADMIN | SUPERADMIN
+  status        String    @default("ACTIVE") // ACTIVE | SUSPENDED | DELETED
+  locale        String    @default("fr")
+  referralCode  String    @unique
+  referredById  String?
+  totpSecret    String?
+  totpEnabled   Boolean   @default(false)
+  failedLogins  Int       @default(0)
+  lockedUntil   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  cvs          Cv[]
+  orders       Order[]
+  entitlements Entitlement[]
+  credits      CreditLedger[]
+  notifications Notification[]
+  resets       PasswordReset[]
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Template {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String
+  category    String
+  hasPhoto    Boolean @default(true)
+  columns     Int     @default(1)
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+  priceXof    Int? // null = prix de l'offre CV_SINGLE
+}
+
+model Cv {
+  id                  String    @id @default(cuid())
+  userId              String
+  title               String
+  templateSlug        String
+  content             String // JSON (voir src/lib/cv-schema.ts)
+  style               String    @default("{}") // JSON : accent, police, taille, densité, sections
+  lang                String    @default("fr")
+  photoAssetId        String?
+  unlockedAt          DateTime?
+  editableUntil       DateTime?
+  visibleToRecruiters Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  revisions CvRevision[]
+  shareLink ShareLink?
+
+  @@index([userId, updatedAt])
+}
+
+model CvRevision {
+  id        String   @id @default(cuid())
+  cvId      String
+  content   String
+  style     String
+  createdAt DateTime @default(now())
+  cv        Cv       @relation(fields: [cvId], references: [id], onDelete: Cascade)
+
+  @@index([cvId, createdAt])
+}
+
+model Asset {
+  id         String    @id @default(cuid())
+  ownerId    String?
+  kind       String // PHOTO | PDF
+  storageKey String    @unique
+  mime       String
+  sizeBytes  Int
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime?
+}
+
+model ShareLink {
+  id           String    @id @default(cuid())
+  cvId         String    @unique
+  token        String    @unique
+  passwordHash String?
+  expiresAt    DateTime?
+  showContact  Boolean   @default(false)
+  revokedAt    DateTime?
+  views        Int       @default(0)
+  lastViewedAt DateTime?
+  createdAt    DateTime  @default(now())
+  cv           Cv        @relation(fields: [cvId], references: [id], onDelete: Cascade)
+}
+
+model Product {
+  id           String  @id @default(cuid())
+  code         String  @unique // CV_SINGLE | CV_PACK_3 | PASS_30 | PASS_90 | CV_REACTIVATE
+  name         String
+  description  String
+  priceXof     Int
+  durationDays Int?
+  credits      Int?
+  isActive     Boolean @default(true)
+  sortOrder    Int     @default(0)
+}
+
+model Order {
+  id            String    @id @default(cuid())
+  number        String    @unique
+  userId        String
+  productCode   String
+  targetCvId    String?
+  baseAmountXof Int
+  discountXof   Int       @default(0)
+  totalXof      Int
+  promoCodeId   String?
+  status        String    @default("CREATED") // CREATED | PENDING_PAYMENT | PAID | FAILED | EXPIRED | CANCELED | REFUNDED
+  paidAt        DateTime?
+  expiresAt     DateTime
+  createdAt     DateTime  @default(now())
+
+  user     User      @relation(fields: [userId], references: [id])
+  payments Payment[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model Payment {
+  id            String   @id @default(cuid())
+  orderId       String
+  gateway       String   @default("FEDAPAY") // FEDAPAY | SIMULATED
+  gatewayTxId   String?  @unique
+  mode          String?
+  phone         String?
+  amountXof     Int
+  status        String   @default("PENDING") // PENDING | SUCCEEDED | FAILED | EXPIRED | REFUNDED | REVIEW
+  lastError     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  order         Order    @relation(fields: [orderId], references: [id])
+
+  @@index([status, createdAt])
+}
+
+model WebhookEvent {
+  id          String    @id @default(cuid())
+  gateway     String
+  eventName   String
+  objectId    String
+  payload     String
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@unique([gateway, eventName, objectId])
+}
+
+model Entitlement {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String // PASS
+  orderId   String    @unique
+  startsAt  DateTime
+  endsAt    DateTime
+  revokedAt DateTime?
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([userId, endsAt])
+}
+
+model CreditLedger {
+  id        String    @id @default(cuid())
+  userId    String
+  delta     Int
+  reason    String // PACK | UNLOCK | REFERRAL | ADMIN | EXPIRE | REFUND
+  orderId   String?
+  cvId      String?
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@unique([orderId, reason])
+  @@index([userId, createdAt])
+}
+
+model PromoCode {
+  id             String    @id @default(cuid())
+  code           String    @unique
+  kind           String // PERCENT | FIXED
+  value          Int
+  minAmountXof   Int?
+  startsAt       DateTime?
+  endsAt         DateTime?
+  maxUses        Int?
+  maxUsesPerUser Int       @default(1)
+  isActive       Boolean   @default(true)
+  redemptions    PromoRedemption[]
+}
+
+model PromoRedemption {
+  id          String    @id @default(cuid())
+  promoCodeId String
+  userId      String
+  orderId     String    @unique
+  createdAt   DateTime  @default(now())
+  promoCode   PromoCode @relation(fields: [promoCodeId], references: [id])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  kind      String
+  title     String
+  body      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  phone     String?
+  subject   String
+  body      String
+  status    String   @default("NEW")
+  createdAt DateTime @default(now())
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  detail    String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
+
+model OutboxMail {
+  id        String   @id @default(cuid())
+  toEmail   String
+  subject   String
+  body      String
+  createdAt DateTime @default(now())
+}
