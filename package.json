@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
-    "build": "prisma migrate deploy && next build",
+      "build": "prisma generate && prisma migrate deploy && next build",
     "start": "next start -H 0.0.0.0 -p 3000",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
@@ -12,7 +12,6 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "pdf:install": "playwright install chromium",
-
     "postinstall": "prisma generate"
   },
   "dependencies": {
